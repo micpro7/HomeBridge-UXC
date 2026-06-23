@@ -1,0 +1,98 @@
+name: Build & Publish Homebridge OCI Bundle for uxc
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install Podman & OCI Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Pull Homebridge ARM64 image
+        run: podman pull --platform linux/arm64 docker.io/homebridge/homebridge:latest
+
+      - name: Extract version from image labels
+        id: version
+        run: |
+          VERSION=$(podman inspect docker.io/homebridge/homebridge:latest \
+            --format '{{ index .Labels "org.opencontainers.image.version" }}')
+
+          if [ -z "$VERSION" ] || [ "$VERSION" = "<no value>" ]; then
+            VERSION="latest"
+          fi
+
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Create and Export OCI Runtime Bundle
+        run: |
+          # 1. Create a working workspace for the bundle structure
+          mkdir -p homebridge-bundle/rootfs
+          
+          # 2. Create a temporary container instance to export the root file system
+          CONTAINER_ID=$(podman create --platform linux/arm64 docker.io/homebridge/homebridge:latest)
+          
+          # 3. Export the true rootfs directory content into our bundle folder
+          podman export "$CONTAINER_ID" | tar -C homebridge-bundle/rootfs -xf -
+          podman rm "$CONTAINER_ID"
+          
+          # 4. Generate a clean, compliant config.json tailored for ujail
+          cat << 'EOF' > homebridge-bundle/config.json
+          {
+            "ociVersion": "1.0.2",
+            "process": {
+              "terminal": false,
+              "user": { "uid": 0, "gid": 0 },
+              "args": ["/init"],
+              "env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "HOME=/root",
+                "HOMEBRIDGE_CONFIG_UI=1"
+              ],
+              "cwd": "/",
+              "capabilities": {
+                "bounding": ["CAP_CHOWN", "CAP_SETUID", "CAP_SETGID", "CAP_NET_BIND_SERVICE", "CAP_NET_RAW"],
+                "effective": ["CAP_CHOWN", "CAP_SETUID", "CAP_SETGID", "CAP_NET_BIND_SERVICE", "CAP_NET_RAW"],
+                "inheritable": ["CAP_CHOWN", "CAP_SETUID", "CAP_SETGID", "CAP_NET_BIND_SERVICE", "CAP_NET_RAW"],
+                "permitted": ["CAP_CHOWN", "CAP_SETUID", "CAP_SETGID", "CAP_NET_BIND_SERVICE", "CAP_NET_RAW"]
+              }
+            },
+            "root": {
+              "path": "rootfs",
+              "readonly": false
+            },
+            "mounts": [
+              { "destination": "/proc", "type": "proc", "source": "proc" },
+              { "destination": "/dev", "type": "tmpfs", "source": "tmpfs", "options": ["nosuid", "strictatime", "mode=755", "size=65536k"] },
+              { "destination": "/sys", "type": "sysfs", "source": "sysfs", "options": ["nosuid", "nodev", "noexec", "ro"] }
+            ],
+            "linux": {
+              "namespaces": [
+                { "type": "pid" },
+                { "type": "network" },
+                { "type": "ipc" },
+                { "type": "uts" },
+                { "type": "mount" }
+              ]
+            }
+          }
+          EOF
+
+          # 5. Pack the runtime-ready bundle into a raw, uncompressed tar archive
+          tar -cf homebridge-uxc-bundle-arm64.tar -C homebridge-bundle .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: hb-uxc-arm64-${{ env.VERSION }}
+          name: Homebridge uxc Bundle ARM64 v${{ env.VERSION }}
+          files: homebridge-uxc-bundle-arm64.tar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
