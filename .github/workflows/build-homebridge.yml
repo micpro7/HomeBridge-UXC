@@ -1,41 +1,67 @@
 name: Build Lean Homebridge UXC Bundle
 
+# =========================================================
+
+# Trigger configuration
+
+# =========================================================
+
 on:
 push:
-branches: [main]
+branches:
+- main
 workflow_dispatch:
+
+# =========================================================
+
+# Jobs definition
+
+# =========================================================
 
 jobs:
 build:
-runs-on: ubuntu-latest
 
 ```
+# =======================================================
+# Runner environment
+# =======================================================
+runs-on: ubuntu-22.04
+
+# =======================================================
+# Permissions for GitHub Releases
+# =======================================================
 permissions:
   contents: write
 
+# =======================================================
+# Environment variables
+# =======================================================
 env:
   QEMU_CPU: cortex-a72
 
+# =======================================================
+# Build steps
+# =======================================================
 steps:
 
-  # =========================
-  # Checkout source
-  # =========================
+  # -------------------------
+  # Checkout repository
+  # -------------------------
   - name: Checkout Repository
     uses: actions/checkout@v4
 
-  # =========================
-  # Install build tools
-  # =========================
-  - name: Install dependencies
+  # -------------------------
+  # Install dependencies
+  # -------------------------
+  - name: Install Podman and tools
     run: |
       sudo apt-get update
       sudo apt-get install -y podman qemu-user-static curl jq
 
-  # =========================
-  # Build Alpine ARM64 rootfs
-  # =========================
-  - name: Build Homebridge rootfs
+  # -------------------------
+  # Build ARM64 rootfs
+  # -------------------------
+  - name: Build Homebridge RootFS
     run: |
       set -e
 
@@ -43,8 +69,8 @@ steps:
 
       CONTAINER_ID=$(podman run --platform linux/arm64 -d docker.io/alpine:latest sleep infinity)
 
-      # Install runtime dependencies
       podman exec $CONTAINER_ID apk update
+
       podman exec $CONTAINER_ID apk add --no-cache \
         nodejs-current \
         npm \
@@ -53,22 +79,17 @@ steps:
         g++ \
         dbus
 
-      # Install Homebridge
       podman exec $CONTAINER_ID npm install -g --unsafe-perm \
         homebridge \
         homebridge-config-ui-x
 
-      # Detect binary path
       HB_BIN=$(podman exec $CONTAINER_ID which homebridge)
-
       echo "HB_BIN=$HB_BIN" >> $GITHUB_ENV
 
-      echo "[i] Homebridge binary: $HB_BIN"
-
-      # Create ONLY empty runtime directory (no config baked in)
+      # Create empty runtime directory (no config baked in)
       podman exec $CONTAINER_ID mkdir -p /var/lib/homebridge
 
-      # Clean build
+      # Clean build artifacts
       podman exec $CONTAINER_ID apk del make g++
       podman exec $CONTAINER_ID rm -rf /root/.npm /var/cache/apk/* /tmp/*
 
@@ -77,12 +98,12 @@ steps:
 
       podman rm -f "$CONTAINER_ID"
 
-  # =========================
-  # OCI config generation
-  # =========================
-  - name: Generate OCI config
+  # -------------------------
+  # Generate OCI config
+  # -------------------------
+  - name: Generate OCI config.json
     run: |
-      cat <<EOF > homebridge-bundle/config.json
+      cat <<'EOF' > homebridge-bundle/config.json
       {
         "ociVersion": "1.0.2",
         "process": {
@@ -125,17 +146,17 @@ steps:
       }
       EOF
 
-  # =========================
+  # -------------------------
   # Package bundle
-  # =========================
-  - name: Package bundle
+  # -------------------------
+  - name: Package OCI bundle
     run: |
       tar -cf homebridge-arm64.tar -C homebridge-bundle .
 
-  # =========================
-  # Release
-  # =========================
-  - name: Publish release
+  # -------------------------
+  # Publish release
+  # -------------------------
+  - name: Publish Release
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     run: |
