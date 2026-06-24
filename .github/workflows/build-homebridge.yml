@@ -46,9 +46,6 @@ jobs:
             g++ \
             dbus
 
-          # Establish a symbolic link to prevent path lookup failures for modern global npm wrappers
-          podman exec $CONTAINER_ID ln -sf /usr/bin/node-current /usr/bin/node
-
           podman exec $CONTAINER_ID npm install -g --unsafe-perm \
             homebridge \
             homebridge-config-ui-x
