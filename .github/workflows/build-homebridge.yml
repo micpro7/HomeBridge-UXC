@@ -15,26 +15,14 @@ on:
 jobs:
   build:
 
-    # =====================================================
-    # Runner
-    # =====================================================
     runs-on: ubuntu-22.04
 
-    # =====================================================
-    # Permissions
-    # =====================================================
     permissions:
       contents: write
 
-    # =====================================================
-    # Environment
-    # =====================================================
     env:
       QEMU_CPU: cortex-a72
 
-    # =====================================================
-    # Steps
-    # =====================================================
     steps:
 
       # -----------------------------------------------------
@@ -42,6 +30,13 @@ jobs:
       # -----------------------------------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      # -----------------------------------------------------
+      # Set version (THIS FIXES YOUR MISSING VERSION)
+      # -----------------------------------------------------
+      - name: Set Release Version
+        run: |
+          echo "RELEASE_DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
 
       # -----------------------------------------------------
       # Install dependencies
@@ -79,22 +74,19 @@ jobs:
           HB_BIN=$(podman exec $CONTAINER_ID which homebridge)
           echo "HB_BIN=$HB_BIN" >> $GITHUB_ENV
 
-          echo "[i] Homebridge binary: $HB_BIN"
-
-          # Create empty runtime directory only
+          # create empty runtime dir only
           podman exec $CONTAINER_ID mkdir -p /var/lib/homebridge
 
-          # Cleanup
+          # cleanup
           podman exec $CONTAINER_ID apk del make g++ || true
           podman exec $CONTAINER_ID rm -rf /root/.npm /var/cache/apk/* /tmp/*
 
-          # Export filesystem
           podman export "$CONTAINER_ID" | tar -C homebridge-bundle/rootfs -xf -
 
           podman rm -f "$CONTAINER_ID"
 
       # -----------------------------------------------------
-      # Generate OCI config (SAFE - no heredoc)
+      # Generate OCI config.json (safe method)
       # -----------------------------------------------------
       - name: Generate OCI config.json
         run: |
@@ -151,18 +143,21 @@ jobs:
           tar -cf homebridge-arm64.tar -C homebridge-bundle .
 
       # -----------------------------------------------------
-      # Publish release
+      # Publish release (WITH VERSION FIX)
       # -----------------------------------------------------
       - name: Publish Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="Homebridge-latest"
+          TAG="Homebridge-${{ env.RELEASE_DATE }}"
 
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
-              --title "Homebridge Latest" \
+              --title "Homebridge ${{ env.RELEASE_DATE }}" \
               --notes "Lean UXC Homebridge runtime bundle"
+          else
+            gh release edit "$TAG" \
+              --title "Homebridge ${{ env.RELEASE_DATE }}"
           fi
 
           gh release upload "$TAG" homebridge-arm64.tar --clobber
