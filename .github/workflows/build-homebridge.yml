@@ -30,7 +30,7 @@ jobs:
           # 3. Install Homebridge cleanly
           podman exec $CONTAINER_ID npm install -g --unsafe-perm homebridge homebridge-config-ui-x
           
-          # 4. Create essential directories
+          # 4. Create essential data directories
           podman exec $CONTAINER_ID mkdir -p /var/lib/homebridge
           
           # 5. Export the clean rootfs directly out to our workspace folder
@@ -65,31 +65,4 @@ jobs:
             "mounts": [
               { "destination": "/proc", "type": "proc", "source": "proc" },
               { "destination": "/dev", "type": "tmpfs", "source": "tmpfs", "options": ["nosuid", "strictatime", "mode=755", "size=65536k"] },
-              { "destination": "/sys", "type": "sysfs", "source": "sysfs", "options": ["nosuid", "nodev", "noexec", "ro"] }
-            ],
-            "linux": {
-              "namespaces": [
-                { "type": "pid" },
-                { "type": "ipc" },
-                { "type": "uts" },
-                { "type": "mount" }
-              ]
-            }
-          }
-          EOF
-
-          # Notice that the "network" namespace is omitted by default here! 
-          # This saves you from needing to run `sed` on the router later.
-
-      - name: Pack raw, lightweight tar archive
-        run: |
-          tar -cf homebridge-uxc-bundle-arm64.tar -C homebridge-bundle .
-
-      - name: Update Latest Release
-        uses: pyurchenko/save-release-asset-action@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          release_name: "Latest Lean Homebridge UXC Bundle"
-          tag_name: "latest"
-          asset_path: "homebridge-uxc-bundle-arm64.tar"
-          overwrite: true
+              { "destination": "/sys", "type": "sysfs", "source": "sysfs", "options":
