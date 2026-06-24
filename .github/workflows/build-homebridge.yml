@@ -17,6 +17,9 @@ jobs:
           sudo apt-get install -y podman qemu-user-static
 
       - name: Build Lean Rootfs inside Alpine ARM64
+        env:
+          # Force QEMU to emulate a processor that includes ARMv8-A CRC extensions
+          QEMU_CPU: cortex-a72
         run: |
           mkdir -p homebridge-bundle/rootfs
           
