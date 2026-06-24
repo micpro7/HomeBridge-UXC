@@ -43,8 +43,8 @@ jobs:
           # Install Homebridge and the Config UI globally without breaking permissions
           podman exec $CONTAINER_ID npm install -g --unsafe-perm homebridge homebridge-config-ui-x
           
-          # Extract the precise version dynamically *inside* the container container before export
-          HB_VERSION=$(podman exec $CONTAINER_ID node -p "require('homebridge/package.json').version")
+          # Force resolution using the explicit global installation path inside Alpine
+          HB_VERSION=$(podman exec $CONTAINER_ID node -p "require('/usr/lib/node_modules/homebridge/package.json').version")
           echo "VERSION=$HB_VERSION" >> $GITHUB_ENV
           echo "Extracted Homebridge Version: $HB_VERSION"
           
