@@ -11,7 +11,6 @@ jobs:
     name: Build OCI Bundle
     runs-on: ubuntu-latest
     
-    # Grant permissions required to create and upload GitHub Releases
     permissions:
       contents: write
     
@@ -53,7 +52,16 @@ jobs:
           # Kill and remove the build container
           podman rm -f "$CONTAINER_ID"
 
-      # 4. Generate the runtime spec configuration file for the userxc sandbox
+      # 4. Extract Homebridge version dynamically from the exported filesystem
+      - name: Parse Homebridge Version
+        id: get_version
+        run: |
+          # Read the precise version of the globally installed homebridge package inside the rootfs
+          HB_VERSION=$(node -p "require('./homebridge-bundle/rootfs/usr/lib/node_modules/homebridge/package.json').version")
+          echo "VERSION=$HB_VERSION" >> $GITHUB_ENV
+          echo "Extracted Homebridge Version: $HB_VERSION"
+
+      # 5. Generate the runtime spec configuration file for the userxc sandbox
       - name: Generate OCI config.json
         run: |
           cat << 'EOF' > homebridge-bundle/config.json
@@ -95,21 +103,24 @@ jobs:
           }
           EOF
 
-      # 5. Compress the rootfs and configuration structure together
+      # 6. Compress the rootfs and configuration structure together including version in target file
       - name: Package Bundle Tarball
         run: |
-          tar -cf homebridge-uxc-bundle-arm64.tar -C homebridge-bundle .
+          tar -cf "homebridge-uxc-bundle-v${{ env.VERSION }}-arm64.tar" -C homebridge-bundle .
 
-      # 6. Check release status and upload the build artifact
+      # 7. Check release status and upload the build artifact matching the dynamic version
       - name: Deploy to GitHub Releases
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # The presence of the .git directory from Step 1 allows gh to instantly resolve the repo name
+          # If the 'latest' release doesn't exist, create it with your preferred name format
           if ! gh release view latest >/dev/null 2>&1; then
             echo "Creating initial latest release placeholder..."
-            gh release create latest --title "Latest Lean Homebridge UXC Bundle" --notes "Automated build of the latest Homebridge bundle."
+            gh release create latest --title "HomeBridge UXC - V${{ env.VERSION }}" --notes "Automated rolling build of the latest Homebridge package structure."
+          else
+            # Dynamically update the Title of the existing rolling release to show the new version
+            gh release edit latest --title "HomeBridge UXC - V${{ env.VERSION }}"
           fi
           
           echo "Uploading bundle to latest release..."
-          gh release upload latest homebridge-uxc-bundle-arm64.tar --clobber
+          gh release upload latest "homebridge-uxc-bundle-v${{ env.VERSION }}-arm64.tar" --clobber
