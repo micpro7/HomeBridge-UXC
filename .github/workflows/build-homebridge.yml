@@ -20,8 +20,8 @@ jobs:
         run: |
           mkdir -p homebridge-bundle/rootfs
           
-          # 1. Start a temporary interactive ARM64 Alpine container
-          CONTAINER_ID=$(podman run --platform linux/arm64 -d docker.io/alpine:3.19 sleep infinity)
+          # 1. Start a temporary interactive ARM64 Alpine container using stable 3.21 for Node 22 LTS
+          CONTAINER_ID=$(podman run --platform linux/arm64 -d docker.io/alpine:3.21 sleep infinity)
           
           # 2. Update and install only the production dependencies inside the container
           podman exec $CONTAINER_ID apk update
@@ -65,4 +65,33 @@ jobs:
             "mounts": [
               { "destination": "/proc", "type": "proc", "source": "proc" },
               { "destination": "/dev", "type": "tmpfs", "source": "tmpfs", "options": ["nosuid", "strictatime", "mode=755", "size=65536k"] },
-              { "destination": "/sys", "type": "sysfs", "source": "sysfs", "options":
+              { "destination": "/sys", "type": "sysfs", "source": "sysfs", "options": ["nosuid", "nodev", "noexec", "ro"] }
+            ],
+            "linux": {
+              "namespaces": [
+                { "type": "pid" },
+                { "type": "ipc" },
+                { "type": "uts" },
+                { "type": "mount" }
+              ]
+            }
+          }
+          EOF
+
+      - name: Pack raw, lightweight tar archive
+        run: |
+          tar -cf homebridge-uxc-bundle-arm64.tar -C homebridge-bundle .
+
+      - name: Update Latest Release via GitHub CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Check if the 'latest' release exists, if not create a placeholder tag
+          if ! gh release view latest >/dev/null 2>&1; then
+            echo "Creating initial latest release placeholder..."
+            gh release create latest --title "Latest Lean Homebridge UXC Bundle" --notes "Automated build of the latest Homebridge bundle."
+          fi
+
+          # Upload and overwrite the asset directly using --clobber
+          echo "Uploading bundle to latest release..."
+          gh release upload latest homebridge-uxc-bundle-arm64.tar --clobber
