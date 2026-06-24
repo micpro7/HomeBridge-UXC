@@ -1,45 +1,55 @@
-name: Build & Publish Homebridge OCI Bundle for uxc
+name: Build Lean Homebridge UXC Bundle
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build:
+    name: Build OCI Bundle
     runs-on: ubuntu-latest
+    
+    env:
+      QEMU_CPU: cortex-a72
 
     steps:
-      - name: Install Podman & QEMU
+      # 1. Checkout the repository to provide the required git context for the GitHub CLI
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. Install native host dependencies
+      - name: Install Podman and QEMU Static
         run: |
           sudo apt-get update
           sudo apt-get install -y podman qemu-user-static
 
+      # 3. Build the lean rootfs inside an isolated ARM64 Alpine container
       - name: Build Lean Rootfs inside Alpine ARM64
-        env:
-          # Force QEMU to emulate a processor that includes ARMv8-A CRC extensions
-          QEMU_CPU: cortex-a72
         run: |
           mkdir -p homebridge-bundle/rootfs
           
-          # 1. Start a temporary interactive ARM64 Alpine container using stable 3.21 for Node 22 LTS
+          # Start a temporary interactive ARM64 Alpine container (using stable 3.21 for Node 22 LTS)
           CONTAINER_ID=$(podman run --platform linux/arm64 -d docker.io/alpine:3.21 sleep infinity)
           
-          # 2. Update and install only the production dependencies inside the container
+          # Update repositories and install runtime + build tools
           podman exec $CONTAINER_ID apk update
           podman exec $CONTAINER_ID apk add --no-cache nodejs npm python3 make g++ dbus
           
-          # 3. Install Homebridge cleanly
+          # Install Homebridge and the Config UI globally without breaking permissions
           podman exec $CONTAINER_ID npm install -g --unsafe-perm homebridge homebridge-config-ui-x
           
-          # 4. Create essential data directories
+          # Create default runtime data directories
           podman exec $CONTAINER_ID mkdir -p /var/lib/homebridge
           
-          # 5. Export the clean rootfs directly out to our workspace folder
+          # Export the populated filesystem cleanly to our host workspace
           podman export "$CONTAINER_ID" | tar -C homebridge-bundle/rootfs -xf -
+          
+          # Kill and remove the build container
           podman rm -f "$CONTAINER_ID"
 
+      # 4. Generate the runtime spec configuration file for the userxc sandbox
       - name: Generate OCI config.json
         run: |
           cat << 'EOF' > homebridge-bundle/config.json
@@ -81,20 +91,21 @@ jobs:
           }
           EOF
 
-      - name: Pack raw, lightweight tar archive
+      # 5. Compress the rootfs and configuration structure together
+      - name: Package Bundle Tarball
         run: |
           tar -cf homebridge-uxc-bundle-arm64.tar -C homebridge-bundle .
 
-      - name: Update Latest Release via GitHub CLI
+      # 6. Check release status and upload the build artifact
+      - name: Deploy to GitHub Releases
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Check if the 'latest' release exists, if not create a placeholder tag
+          # The presence of the .git directory from Step 1 allows gh to instantly resolve the repo name
           if ! gh release view latest >/dev/null 2>&1; then
             echo "Creating initial latest release placeholder..."
             gh release create latest --title "Latest Lean Homebridge UXC Bundle" --notes "Automated build of the latest Homebridge bundle."
           fi
-
-          # Upload and overwrite the asset directly using --clobber
+          
           echo "Uploading bundle to latest release..."
           gh release upload latest homebridge-uxc-bundle-arm64.tar --clobber
