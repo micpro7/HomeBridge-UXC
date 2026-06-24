@@ -32,11 +32,14 @@ jobs:
 
           mkdir -p homebridge-bundle/rootfs
 
-          CONTAINER_ID=$(podman run --platform linux/arm64 -d docker.io/alpine:3.21 sleep infinity)
+          # Dynamically pull the absolute latest Alpine image available
+          CONTAINER_ID=$(podman run --platform linux/arm64 -d docker.io/alpine:latest sleep infinity)
 
           podman exec $CONTAINER_ID apk update
+          
+          # Swapped nodejs for nodejs-current to pull the absolute latest Node version
           podman exec $CONTAINER_ID apk add --no-cache \
-            nodejs \
+            nodejs-current \
             npm \
             python3 \
             make \
@@ -47,11 +50,10 @@ jobs:
             homebridge \
             homebridge-config-ui-x
 
-          # Extract package version using explicit path to avoid module loading errors
+          # Dynamically extract version to bypass global shell layout quirks
           HB_VERSION=$(podman exec $CONTAINER_ID node -p "require('/usr/lib/node_modules/homebridge/package.json').version")
           HB_BIN="/usr/bin/homebridge"
 
-          # Persist variables across steps via GITHUB_ENV
           echo "VERSION=$HB_VERSION" >> $GITHUB_ENV
           echo "HB_BIN=$HB_BIN" >> $GITHUB_ENV
 
@@ -82,21 +84,17 @@ jobs:
           JSON
           EOF
 
+          # Clean up compiler footprint to minimize final image footprint for storage
           podman exec $CONTAINER_ID apk del make g++
-
           podman exec $CONTAINER_ID npm cache clean --force || true
-          podman exec $CONTAINER_ID rm -rf /root/.npm
-          podman exec $CONTAINER_ID rm -rf /var/cache/apk/*
-          podman exec $CONTAINER_ID rm -rf /tmp/*
+          podman exec $CONTAINER_ID rm -rf /root/.npm /var/cache/apk/* /tmp/*
 
           podman export "$CONTAINER_ID" | tar -C homebridge-bundle/rootfs -xf -
-
           podman rm -f "$CONTAINER_ID"
 
       - name: Generate OCI config.json
         run: |
-          # Use the environment variables exported to GITHUB_ENV using standard GitHub Actions template syntax ${{ env.VAR }}
-          cat > homebridge-bundle/config.json <<EOF
+          cat << 'EOF' > homebridge-bundle/config.json
           {
             "ociVersion": "1.0.2",
             "process": {
@@ -186,18 +184,10 @@ jobs:
             ],
             "linux": {
               "namespaces": [
-                {
-                  "type": "pid"
-                },
-                {
-                  "type": "ipc"
-                },
-                {
-                  "type": "uts"
-                },
-                {
-                  "type": "mount"
-                }
+                { "type": "pid" },
+                { "type": "ipc" },
+                { "type": "uts" },
+                { "type": "mount" }
               ]
             }
           }
