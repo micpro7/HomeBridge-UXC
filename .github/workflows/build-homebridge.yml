@@ -11,6 +11,10 @@ jobs:
     name: Build OCI Bundle
     runs-on: ubuntu-latest
     
+    # Grant permissions required to create and upload GitHub Releases
+    permissions:
+      contents: write
+    
     env:
       QEMU_CPU: cortex-a72
 
