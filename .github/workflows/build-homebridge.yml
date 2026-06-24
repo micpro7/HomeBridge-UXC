@@ -50,24 +50,21 @@ jobs:
             homebridge \
             homebridge-config-ui-x
 
-          # Foolproof version extraction looking through standard Alpine global npm install paths
-          HB_VERSION=$(podman exec $CONTAINER_ID node -p "
-            try { require('/usr/local/lib/node_modules/homebridge-config-ui-x/package.json').version }
-            catch(e) { require('/usr/lib/node_modules/homebridge-config-ui-x/package.json').version }
-          " | tr -d '\r' | xargs)
+          # Extract the exact release date (YYYY-MM-DD) from the official container repo metadata
+          PUBLISHED_DATE=$(curl -s https://api.github.com/repos/homebridge/docker-homebridge/releases/latest | jq -r .published_at | cut -d'T' -f1)
           
-          HB_BIN="/usr/bin/homebridge"
-
-          # Fallback check if string parsing fails completely
-          if [ -z "$HB_VERSION" ] || [ "$HB_VERSION" = "undefined" ]; then
-            HB_VERSION="latest"
+          # Fallback check if the API rate limit hits or fails
+          if [ -z "$PUBLISHED_DATE" ] || [ "$PUBLISHED_DATE" = "null" ]; then
+            PUBLISHED_DATE=$(date +'%Y-%m-%d')
           fi
 
-          echo "VERSION=$HB_VERSION" >> $GITHUB_ENV
+          HB_BIN="/usr/bin/homebridge"
+
+          echo "RELEASE_DATE=$PUBLISHED_DATE" >> $GITHUB_ENV
           echo "HB_BIN=$HB_BIN" >> $GITHUB_ENV
 
-          echo "Homebridge Bundle Version: $HB_VERSION"
-          echo "Homebridge Binary Path    : $HB_BIN"
+          echo "Targeting Release Date Alignment: $PUBLISHED_DATE"
+          echo "Homebridge Binary Path          : $HB_BIN"
 
           podman exec $CONTAINER_ID mkdir -p /var/lib/homebridge
 
@@ -204,33 +201,33 @@ jobs:
 
       - name: Package Bundle
         run: |
-          tar -cf "homebridge-uxc-bundle-v${{ env.VERSION }}-arm64.tar" \
-            -C homebridge-bundle .
+          # Raw clean header without internal version numbers tagged to the tar file
+          tar -cf "homebridge-arm64.tar" -C homebridge-bundle .
 
       - name: Update Latest Tag
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
 
-          # Force push the specific tag format matching your other build workflow
-          git tag -f "homebridge-arm64-${{ env.VERSION }}"
-          git push origin "homebridge-arm64-${{ env.VERSION }}" --force
+          TAG_NAME="Homebridge-${{ env.RELEASE_DATE }}"
+
+          # Force push the specific tag format matching your preference
+          git tag -f "$TAG_NAME"
+          git push origin "$TAG_NAME" --force
 
       - name: Publish Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG_NAME="homebridge-arm64-${{ env.VERSION }}"
+          TAG_NAME="Homebridge-${{ env.RELEASE_DATE }}"
           
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
             gh release create "$TAG_NAME" \
-              --title "Homebridge ARM64 v${{ env.VERSION }}" \
-              --notes "Automated rolling build of the latest UXC native bundle framework matching core image tracking lines."
+              --title "Homebridge ${{ env.RELEASE_DATE }}" \
+              --notes "Automated rolling build of the latest UXC native bundle framework matching official deployment checkpoints."
           else
             gh release edit "$TAG_NAME" \
-              --title "Homebridge ARM64 v${{ env.VERSION }}"
+              --title "Homebridge ${{ env.RELEASE_DATE }}"
           fi
 
-          gh release upload "$TAG_NAME" \
-            "homebridge-uxc-bundle-v${{ env.VERSION }}-arm64.tar" \
-            --clobber
+          gh release upload "$TAG_NAME" "homebridge-arm64.tar" --clobber
