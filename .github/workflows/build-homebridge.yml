@@ -11,50 +11,44 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install Podman & OCI Tools
+      - name: Install Podman & QEMU
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman
+          sudo apt-get install -y podman qemu-user-static
 
-      - name: Pull Homebridge ARM64 image
-        run: podman pull --platform linux/arm64 docker.io/homebridge/homebridge:latest
-
-      - name: Extract version from image labels
-        id: version
+      - name: Build Lean Rootfs inside Alpine ARM64
         run: |
-          VERSION=$(podman inspect docker.io/homebridge/homebridge:latest \
-            --format '{{ index .Labels "org.opencontainers.image.version" }}')
-
-          if [ -z "$VERSION" ] || [ "$VERSION" = "<no value>" ]; then
-            VERSION="latest"
-          fi
-
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-
-      - name: Create and Export OCI Runtime Bundle
-        run: |
-          # 1. Create a working workspace for the bundle structure
           mkdir -p homebridge-bundle/rootfs
           
-          # 2. Create a temporary container instance to export the root file system
-          CONTAINER_ID=$(podman create --platform linux/arm64 docker.io/homebridge/homebridge:latest)
+          # 1. Start a temporary interactive ARM64 Alpine container
+          CONTAINER_ID=$(podman run --platform linux/arm64 -d docker.io/alpine:3.19 sleep infinity)
           
-          # 3. Export the true rootfs directory content into our bundle folder
+          # 2. Update and install only the production dependencies inside the container
+          podman exec $CONTAINER_ID apk update
+          podman exec $CONTAINER_ID apk add --no-cache nodejs npm python3 make g++ dbus
+          
+          # 3. Install Homebridge cleanly
+          podman exec $CONTAINER_ID npm install -g --unsafe-perm homebridge homebridge-config-ui-x
+          
+          # 4. Create essential directories
+          podman exec $CONTAINER_ID mkdir -p /var/lib/homebridge
+          
+          # 5. Export the clean rootfs directly out to our workspace folder
           podman export "$CONTAINER_ID" | tar -C homebridge-bundle/rootfs -xf -
-          podman rm "$CONTAINER_ID"
-          
-          # 4. Generate a clean, compliant config.json tailored for ujail
+          podman rm -f "$CONTAINER_ID"
+
+      - name: Generate OCI config.json
+        run: |
           cat << 'EOF' > homebridge-bundle/config.json
           {
             "ociVersion": "1.0.2",
             "process": {
               "terminal": false,
               "user": { "uid": 0, "gid": 0 },
-              "args": ["/init"],
+              "args": ["/usr/bin/homebridge", "-U", "/var/lib/homebridge"],
               "env": [
                 "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                "HOME=/root",
-                "HOMEBRIDGE_CONFIG_UI=1"
+                "HOME=/root"
               ],
               "cwd": "/",
               "capabilities": {
@@ -76,7 +70,6 @@ jobs:
             "linux": {
               "namespaces": [
                 { "type": "pid" },
-                { "type": "network" },
                 { "type": "ipc" },
                 { "type": "uts" },
                 { "type": "mount" }
@@ -85,14 +78,18 @@ jobs:
           }
           EOF
 
-          # 5. Pack the runtime-ready bundle into a raw, uncompressed tar archive
+          # Notice that the "network" namespace is omitted by default here! 
+          # This saves you from needing to run `sed` on the router later.
+
+      - name: Pack raw, lightweight tar archive
+        run: |
           tar -cf homebridge-uxc-bundle-arm64.tar -C homebridge-bundle .
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Update Latest Release
+        uses: pyurchenko/save-release-asset-action@v2
         with:
-          tag_name: hb-uxc-arm64-${{ env.VERSION }}
-          name: Homebridge uxc Bundle ARM64 v${{ env.VERSION }}
-          files: homebridge-uxc-bundle-arm64.tar
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release_name: "Latest Lean Homebridge UXC Bundle"
+          tag_name: "latest"
+          asset_path: "homebridge-uxc-bundle-arm64.tar"
+          overwrite: true
