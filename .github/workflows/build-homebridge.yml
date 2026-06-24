@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 # =========================================================
-# Job definition
+# Job
 # =========================================================
 jobs:
   build:
@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     # =====================================================
-    # Permissions (for releases)
+    # Permissions
     # =====================================================
     permissions:
       contents: write
@@ -76,88 +76,72 @@ jobs:
             homebridge \
             homebridge-config-ui-x
 
-          # detect binary path
           HB_BIN=$(podman exec $CONTAINER_ID which homebridge)
           echo "HB_BIN=$HB_BIN" >> $GITHUB_ENV
 
           echo "[i] Homebridge binary: $HB_BIN"
 
-          # create runtime directory only (no config baked in)
+          # Create empty runtime directory only
           podman exec $CONTAINER_ID mkdir -p /var/lib/homebridge
 
-          # cleanup
+          # Cleanup
           podman exec $CONTAINER_ID apk del make g++ || true
           podman exec $CONTAINER_ID rm -rf /root/.npm /var/cache/apk/* /tmp/*
 
-          # export rootfs
+          # Export filesystem
           podman export "$CONTAINER_ID" | tar -C homebridge-bundle/rootfs -xf -
 
           podman rm -f "$CONTAINER_ID"
 
       # -----------------------------------------------------
-      # Generate OCI config (SAFE METHOD - no heredoc)
+      # Generate OCI config (SAFE - no heredoc)
       # -----------------------------------------------------
       - name: Generate OCI config.json
         run: |
           mkdir -p homebridge-bundle
 
-          cat > homebridge-bundle/config.json <<EOF
-{
-  "ociVersion": "1.0.2",
-  "process": {
-    "terminal": false,
-    "user": {
-      "uid": 0,
-      "gid": 0
-    },
-    "args": [
-      "${HB_BIN}",
-      "-U",
-      "/var/lib/homebridge"
-    ],
-    "env": [
-      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-      "HOME=/root"
-    ],
-    "cwd": "/"
-  },
-  "root": {
-    "path": "rootfs",
-    "readonly": false
-  },
-  "mounts": [
-    {
-      "destination": "/var/lib/homebridge",
-      "type": "bind",
-      "source": "/mnt/SSD/Config/OpenWRT/UXC/HomeBridge",
-      "options": ["rbind", "rw"]
-    },
-    {
-      "destination": "/proc",
-      "type": "proc",
-      "source": "proc"
-    },
-    {
-      "destination": "/dev",
-      "type": "tmpfs",
-      "source": "tmpfs"
-    },
-    {
-      "destination": "/sys",
-      "type": "sysfs",
-      "source": "sysfs"
-    }
-  ],
-  "linux": {
-    "namespaces": [
-      { "type": "pid" },
-      { "type": "ipc" },
-      { "type": "uts" },
-      { "type": "mount" }
-    ]
-  }
-}
-EOF
+          CONFIG=homebridge-bundle/config.json
+
+          printf '{\n' > $CONFIG
+          printf '  "ociVersion": "1.0.2",\n' >> $CONFIG
+          printf '  "process": {\n' >> $CONFIG
+          printf '    "terminal": false,\n' >> $CONFIG
+          printf '    "user": { "uid": 0, "gid": 0 },\n' >> $CONFIG
+          printf '    "args": [\n' >> $CONFIG
+          printf '      "%s",\n' "$HB_BIN" >> $CONFIG
+          printf '      "-U",\n' >> $CONFIG
+          printf '      "/var/lib/homebridge"\n' >> $CONFIG
+          printf '    ],\n' >> $CONFIG
+          printf '    "env": [\n' >> $CONFIG
+          printf '      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",\n' >> $CONFIG
+          printf '      "HOME=/root"\n' >> $CONFIG
+          printf '    ],\n' >> $CONFIG
+          printf '    "cwd": "/"\n' >> $CONFIG
+          printf '  },\n' >> $CONFIG
+          printf '  "root": {\n' >> $CONFIG
+          printf '    "path": "rootfs",\n' >> $CONFIG
+          printf '    "readonly": false\n' >> $CONFIG
+          printf '  },\n' >> $CONFIG
+          printf '  "mounts": [\n' >> $CONFIG
+          printf '    {\n' >> $CONFIG
+          printf '      "destination": "/var/lib/homebridge",\n' >> $CONFIG
+          printf '      "type": "bind",\n' >> $CONFIG
+          printf '      "source": "/mnt/SSD/Config/OpenWRT/UXC/HomeBridge",\n' >> $CONFIG
+          printf '      "options": ["rbind", "rw"]\n' >> $CONFIG
+          printf '    },\n' >> $CONFIG
+          printf '    { "destination": "/proc", "type": "proc", "source": "proc" },\n' >> $CONFIG
+          printf '    { "destination": "/dev", "type": "tmpfs", "source": "tmpfs" },\n' >> $CONFIG
+          printf '    { "destination": "/sys", "type": "sysfs", "source": "sysfs" }\n' >> $CONFIG
+          printf '  ],\n' >> $CONFIG
+          printf '  "linux": {\n' >> $CONFIG
+          printf '    "namespaces": [\n' >> $CONFIG
+          printf '      { "type": "pid" },\n' >> $CONFIG
+          printf '      { "type": "ipc" },\n' >> $CONFIG
+          printf '      { "type": "uts" },\n' >> $CONFIG
+          printf '      { "type": "mount" }\n' >> $CONFIG
+          printf '    ]\n' >> $CONFIG
+          printf '  }\n' >> $CONFIG
+          printf '}\n' >> $CONFIG
 
       # -----------------------------------------------------
       # Package bundle
@@ -167,7 +151,7 @@ EOF
           tar -cf homebridge-arm64.tar -C homebridge-bundle .
 
       # -----------------------------------------------------
-      # Release
+      # Publish release
       # -----------------------------------------------------
       - name: Publish Release
         env:
