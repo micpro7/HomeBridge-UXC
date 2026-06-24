@@ -50,12 +50,16 @@ jobs:
             homebridge \
             homebridge-config-ui-x
 
-          # Extract version metrics cleanly via homebridge-config-ui-x (matches UI / image bundles)
-          HB_VERSION=$(podman exec $CONTAINER_ID homebridge-config-ui-x -V | tr -d '\r' | xargs)
+          # Foolproof version extraction looking through standard Alpine global npm install paths
+          HB_VERSION=$(podman exec $CONTAINER_ID node -p "
+            try { require('/usr/local/lib/node_modules/homebridge-config-ui-x/package.json').version }
+            catch(e) { require('/usr/lib/node_modules/homebridge-config-ui-x/package.json').version }
+          " | tr -d '\r' | xargs)
+          
           HB_BIN="/usr/bin/homebridge"
 
-          # Fallback check if string parsing fails
-          if [ -z "$HB_VERSION" ]; then
+          # Fallback check if string parsing fails completely
+          if [ -z "$HB_VERSION" ] || [ "$HB_VERSION" = "undefined" ]; then
             HB_VERSION="latest"
           fi
 
