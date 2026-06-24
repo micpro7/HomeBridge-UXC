@@ -50,8 +50,8 @@ jobs:
             homebridge \
             homebridge-config-ui-x
 
-          # Extract version metrics securely via node modules layout
-          HB_VERSION=$(podman exec $CONTAINER_ID node -p "require('/usr/lib/node_modules/homebridge/package.json').version")
+          # Extract version metrics cleanly without relying on brittle hardcoded node_modules paths
+          HB_VERSION=$(podman exec $CONTAINER_ID homebridge -V | tr -d '\r' | xargs)
           HB_BIN="/usr/bin/homebridge"
 
           echo "VERSION=$HB_VERSION" >> $GITHUB_ENV
