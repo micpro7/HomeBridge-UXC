@@ -43,6 +43,11 @@ jobs:
           # Install Homebridge and the Config UI globally without breaking permissions
           podman exec $CONTAINER_ID npm install -g --unsafe-perm homebridge homebridge-config-ui-x
           
+          # Extract the precise version dynamically *inside* the container container before export
+          HB_VERSION=$(podman exec $CONTAINER_ID node -p "require('homebridge/package.json').version")
+          echo "VERSION=$HB_VERSION" >> $GITHUB_ENV
+          echo "Extracted Homebridge Version: $HB_VERSION"
+          
           # Create default runtime data directories
           podman exec $CONTAINER_ID mkdir -p /var/lib/homebridge
           
@@ -52,16 +57,7 @@ jobs:
           # Kill and remove the build container
           podman rm -f "$CONTAINER_ID"
 
-      # 4. Extract Homebridge version dynamically from the exported filesystem
-      - name: Parse Homebridge Version
-        id: get_version
-        run: |
-          # Read the precise version of the globally installed homebridge package inside the rootfs
-          HB_VERSION=$(node -p "require('./homebridge-bundle/rootfs/usr/lib/node_modules/homebridge/package.json').version")
-          echo "VERSION=$HB_VERSION" >> $GITHUB_ENV
-          echo "Extracted Homebridge Version: $HB_VERSION"
-
-      # 5. Generate the runtime spec configuration file for the userxc sandbox
+      # 4. Generate the runtime spec configuration file for the userxc sandbox
       - name: Generate OCI config.json
         run: |
           cat << 'EOF' > homebridge-bundle/config.json
@@ -103,12 +99,12 @@ jobs:
           }
           EOF
 
-      # 6. Compress the rootfs and configuration structure together including version in target file
+      # 5. Compress the rootfs and configuration structure together including version in target file
       - name: Package Bundle Tarball
         run: |
           tar -cf "homebridge-uxc-bundle-v${{ env.VERSION }}-arm64.tar" -C homebridge-bundle .
 
-      # 7. Check release status and upload the build artifact matching the dynamic version
+      # 6. Check release status and upload the build artifact matching the dynamic version
       - name: Deploy to GitHub Releases
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
