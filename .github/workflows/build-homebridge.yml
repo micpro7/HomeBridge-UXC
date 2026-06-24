@@ -50,15 +50,20 @@ jobs:
             homebridge \
             homebridge-config-ui-x
 
-          # Extract version metrics cleanly without relying on brittle hardcoded node_modules paths
-          HB_VERSION=$(podman exec $CONTAINER_ID homebridge -V | tr -d '\r' | xargs)
+          # Extract version metrics cleanly via homebridge-config-ui-x (matches UI / image bundles)
+          HB_VERSION=$(podman exec $CONTAINER_ID homebridge-config-ui-x -V | tr -d '\r' | xargs)
           HB_BIN="/usr/bin/homebridge"
+
+          # Fallback check if string parsing fails
+          if [ -z "$HB_VERSION" ]; then
+            HB_VERSION="latest"
+          fi
 
           echo "VERSION=$HB_VERSION" >> $GITHUB_ENV
           echo "HB_BIN=$HB_BIN" >> $GITHUB_ENV
 
-          echo "Homebridge Version: $HB_VERSION"
-          echo "Homebridge Binary : $HB_BIN"
+          echo "Homebridge Bundle Version: $HB_VERSION"
+          echo "Homebridge Binary Path    : $HB_BIN"
 
           podman exec $CONTAINER_ID mkdir -p /var/lib/homebridge
 
@@ -203,22 +208,25 @@ jobs:
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
 
-          git tag -f latest
-          git push origin latest --force
+          # Force push the specific tag format matching your other build workflow
+          git tag -f "homebridge-arm64-${{ env.VERSION }}"
+          git push origin "homebridge-arm64-${{ env.VERSION }}" --force
 
       - name: Publish Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if ! gh release view latest >/dev/null 2>&1; then
-            gh release create latest \
-              --title "HomeBridge UXC - V${{ env.VERSION }}" \
-              --notes "Automated rolling build of the latest Homebridge OCI bundle."
+          TAG_NAME="homebridge-arm64-${{ env.VERSION }}"
+          
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" \
+              --title "Homebridge ARM64 v${{ env.VERSION }}" \
+              --notes "Automated rolling build of the latest UXC native bundle framework matching core image tracking lines."
           else
-            gh release edit latest \
-              --title "HomeBridge UXC - V${{ env.VERSION }}"
+            gh release edit "$TAG_NAME" \
+              --title "Homebridge ARM64 v${{ env.VERSION }}"
           fi
 
-          gh release upload latest \
+          gh release upload "$TAG_NAME" \
             "homebridge-uxc-bundle-v${{ env.VERSION }}-arm64.tar" \
             --clobber
