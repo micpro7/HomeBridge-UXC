@@ -1,172 +1,184 @@
 name: Build Lean Homebridge UXC Bundle
 
 # =========================================================
-
-# Trigger configuration
-
+# Trigger
 # =========================================================
-
 on:
-push:
-branches:
-- main
-workflow_dispatch:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 # =========================================================
-
-# Jobs definition
-
+# Job definition
 # =========================================================
-
 jobs:
-build:
+  build:
 
-```
-# =======================================================
-# Runner environment
-# =======================================================
-runs-on: ubuntu-22.04
+    # =====================================================
+    # Runner
+    # =====================================================
+    runs-on: ubuntu-22.04
 
-# =======================================================
-# Permissions for GitHub Releases
-# =======================================================
-permissions:
-  contents: write
+    # =====================================================
+    # Permissions (for releases)
+    # =====================================================
+    permissions:
+      contents: write
 
-# =======================================================
-# Environment variables
-# =======================================================
-env:
-  QEMU_CPU: cortex-a72
-
-# =======================================================
-# Build steps
-# =======================================================
-steps:
-
-  # -------------------------
-  # Checkout repository
-  # -------------------------
-  - name: Checkout Repository
-    uses: actions/checkout@v4
-
-  # -------------------------
-  # Install dependencies
-  # -------------------------
-  - name: Install Podman and tools
-    run: |
-      sudo apt-get update
-      sudo apt-get install -y podman qemu-user-static curl jq
-
-  # -------------------------
-  # Build ARM64 rootfs
-  # -------------------------
-  - name: Build Homebridge RootFS
-    run: |
-      set -e
-
-      mkdir -p homebridge-bundle/rootfs
-
-      CONTAINER_ID=$(podman run --platform linux/arm64 -d docker.io/alpine:latest sleep infinity)
-
-      podman exec $CONTAINER_ID apk update
-
-      podman exec $CONTAINER_ID apk add --no-cache \
-        nodejs-current \
-        npm \
-        python3 \
-        make \
-        g++ \
-        dbus
-
-      podman exec $CONTAINER_ID npm install -g --unsafe-perm \
-        homebridge \
-        homebridge-config-ui-x
-
-      HB_BIN=$(podman exec $CONTAINER_ID which homebridge)
-      echo "HB_BIN=$HB_BIN" >> $GITHUB_ENV
-
-      # Create empty runtime directory (no config baked in)
-      podman exec $CONTAINER_ID mkdir -p /var/lib/homebridge
-
-      # Clean build artifacts
-      podman exec $CONTAINER_ID apk del make g++
-      podman exec $CONTAINER_ID rm -rf /root/.npm /var/cache/apk/* /tmp/*
-
-      # Export rootfs
-      podman export "$CONTAINER_ID" | tar -C homebridge-bundle/rootfs -xf -
-
-      podman rm -f "$CONTAINER_ID"
-
-  # -------------------------
-  # Generate OCI config
-  # -------------------------
-  - name: Generate OCI config.json
-    run: |
-      cat <<'EOF' > homebridge-bundle/config.json
-      {
-        "ociVersion": "1.0.2",
-        "process": {
-          "terminal": false,
-          "user": { "uid": 0, "gid": 0 },
-          "args": [
-            "${{ env.HB_BIN }}",
-            "-U",
-            "/var/lib/homebridge"
-          ],
-          "env": [
-            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "HOME=/root"
-          ],
-          "cwd": "/"
-        },
-        "root": {
-          "path": "rootfs",
-          "readonly": false
-        },
-        "mounts": [
-          {
-            "destination": "/var/lib/homebridge",
-            "type": "bind",
-            "source": "/mnt/SSD/Config/OpenWRT/UXC/HomeBridge",
-            "options": ["rbind", "rw"]
-          },
-          { "destination": "/proc", "type": "proc", "source": "proc" },
-          { "destination": "/dev", "type": "tmpfs", "source": "tmpfs" },
-          { "destination": "/sys", "type": "sysfs", "source": "sysfs" }
-        ],
-        "linux": {
-          "namespaces": [
-            { "type": "pid" },
-            { "type": "ipc" },
-            { "type": "uts" },
-            { "type": "mount" }
-          ]
-        }
-      }
-      EOF
-
-  # -------------------------
-  # Package bundle
-  # -------------------------
-  - name: Package OCI bundle
-    run: |
-      tar -cf homebridge-arm64.tar -C homebridge-bundle .
-
-  # -------------------------
-  # Publish release
-  # -------------------------
-  - name: Publish Release
+    # =====================================================
+    # Environment
+    # =====================================================
     env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    run: |
-      TAG="Homebridge-latest"
+      QEMU_CPU: cortex-a72
 
-      if ! gh release view "$TAG" >/dev/null 2>&1; then
-        gh release create "$TAG" \
-          --title "Homebridge Latest" \
-          --notes "Lean UXC Homebridge runtime bundle"
-      fi
+    # =====================================================
+    # Steps
+    # =====================================================
+    steps:
 
-      gh release upload "$TAG" homebridge-arm64.tar --clobber
-```
+      # -----------------------------------------------------
+      # Checkout repo
+      # -----------------------------------------------------
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------
+      # Install dependencies
+      # -----------------------------------------------------
+      - name: Install Podman + tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman qemu-user-static curl jq
+
+      # -----------------------------------------------------
+      # Build ARM64 rootfs
+      # -----------------------------------------------------
+      - name: Build Homebridge RootFS
+        run: |
+          set -e
+
+          mkdir -p homebridge-bundle/rootfs
+
+          CONTAINER_ID=$(podman run --platform linux/arm64 -d docker.io/alpine:latest sleep infinity)
+
+          podman exec $CONTAINER_ID apk update
+
+          podman exec $CONTAINER_ID apk add --no-cache \
+            nodejs-current \
+            npm \
+            python3 \
+            make \
+            g++ \
+            dbus
+
+          podman exec $CONTAINER_ID npm install -g --unsafe-perm \
+            homebridge \
+            homebridge-config-ui-x
+
+          # detect binary path
+          HB_BIN=$(podman exec $CONTAINER_ID which homebridge)
+          echo "HB_BIN=$HB_BIN" >> $GITHUB_ENV
+
+          echo "[i] Homebridge binary: $HB_BIN"
+
+          # create runtime directory only (no config baked in)
+          podman exec $CONTAINER_ID mkdir -p /var/lib/homebridge
+
+          # cleanup
+          podman exec $CONTAINER_ID apk del make g++ || true
+          podman exec $CONTAINER_ID rm -rf /root/.npm /var/cache/apk/* /tmp/*
+
+          # export rootfs
+          podman export "$CONTAINER_ID" | tar -C homebridge-bundle/rootfs -xf -
+
+          podman rm -f "$CONTAINER_ID"
+
+      # -----------------------------------------------------
+      # Generate OCI config (SAFE METHOD - no heredoc)
+      # -----------------------------------------------------
+      - name: Generate OCI config.json
+        run: |
+          mkdir -p homebridge-bundle
+
+          cat > homebridge-bundle/config.json <<EOF
+{
+  "ociVersion": "1.0.2",
+  "process": {
+    "terminal": false,
+    "user": {
+      "uid": 0,
+      "gid": 0
+    },
+    "args": [
+      "${HB_BIN}",
+      "-U",
+      "/var/lib/homebridge"
+    ],
+    "env": [
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "HOME=/root"
+    ],
+    "cwd": "/"
+  },
+  "root": {
+    "path": "rootfs",
+    "readonly": false
+  },
+  "mounts": [
+    {
+      "destination": "/var/lib/homebridge",
+      "type": "bind",
+      "source": "/mnt/SSD/Config/OpenWRT/UXC/HomeBridge",
+      "options": ["rbind", "rw"]
+    },
+    {
+      "destination": "/proc",
+      "type": "proc",
+      "source": "proc"
+    },
+    {
+      "destination": "/dev",
+      "type": "tmpfs",
+      "source": "tmpfs"
+    },
+    {
+      "destination": "/sys",
+      "type": "sysfs",
+      "source": "sysfs"
+    }
+  ],
+  "linux": {
+    "namespaces": [
+      { "type": "pid" },
+      { "type": "ipc" },
+      { "type": "uts" },
+      { "type": "mount" }
+    ]
+  }
+}
+EOF
+
+      # -----------------------------------------------------
+      # Package bundle
+      # -----------------------------------------------------
+      - name: Package OCI bundle
+        run: |
+          tar -cf homebridge-arm64.tar -C homebridge-bundle .
+
+      # -----------------------------------------------------
+      # Release
+      # -----------------------------------------------------
+      - name: Publish Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="Homebridge-latest"
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "Homebridge Latest" \
+              --notes "Lean UXC Homebridge runtime bundle"
+          fi
+
+          gh release upload "$TAG" homebridge-arm64.tar --clobber
