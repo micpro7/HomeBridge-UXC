@@ -1,7 +1,3 @@
-Here’s a polished README.md suitable for your GitHub repository.
-
-:::writing{variant=“document” id=“84271”}
-
 HomeBridge-UXC
 
 A lightweight ARM64 Homebridge container built specifically for OpenWrt using Alpine Linux, designed to run under UXC/crun with persistent storage.
