@@ -1,57 +1,112 @@
-name: Build Homebridge UXC Container
+```yaml
+name: Build Homebridge UXC Bundle
 
 on:
-  push:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install container tools
+      - name: Install required packages
         run: |
           sudo apt update
           sudo apt install -y \
-            docker.io \
-            build-essential \
             curl \
-            jq
+            jq \
+            tar \
+            gzip \
+            xz-utils \
+            ca-certificates
 
-      - name: Enable Docker BuildKit
+      - name: Download Alpine minirootfs
         run: |
-          echo "DOCKER_BUILDKIT=1" >> $GITHUB_ENV
+          mkdir rootfs
+          cd rootfs
 
-      - name: Build Alpine Homebridge image
+          VERSION=$(curl -fsSL https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/latest-releases.yaml \
+            | awk '/minirootfs/ {print $2; exit}')
+
+          curl -L -o alpine.tar.gz \
+            https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/$VERSION
+
+          tar -xzf alpine.tar.gz
+          rm alpine.tar.gz
+
+      - name: Prepare container filesystem
         run: |
-          cat > Dockerfile << 'EOF'
-          FROM alpine:3.20
+          sudo mkdir -p rootfs/proc
+          sudo mkdir -p rootfs/sys
+          sudo mkdir -p rootfs/dev
+          sudo mkdir -p rootfs/etc
+          sudo mkdir -p rootfs/root
 
-          RUN apk add --no-cache \
-              nodejs npm python3 make g++ \
-              avahi-compat-libdns_sd dbus git
-
-          RUN npm install -g --unsafe-perm \
-              homebridge homebridge-config-ui-x
-
-          RUN mkdir -p /config
-
-          EXPOSE 8581
-
-          CMD ["homebridge"]
-          EOF
-
-          docker build -t homebridge-uxc:latest .
-
-      - name: Export container image
+      - name: Install qemu-user-static
         run: |
-          docker save homebridge-uxc:latest -o homebridge-uxc.tar
+          sudo apt install -y qemu-user-static
+          sudo cp /usr/bin/qemu-aarch64-static rootfs/usr/bin/
 
-      - name: Upload artifact
+      - name: Configure DNS
+        run: |
+          echo "nameserver 1.1.1.1" | sudo tee rootfs/etc/resolv.conf
+
+      - name: Install Node.js and Homebridge
+        run: |
+          sudo mount --bind /dev rootfs/dev
+          sudo mount --bind /proc rootfs/proc
+          sudo mount --bind /sys rootfs/sys
+
+          sudo chroot rootfs /usr/bin/qemu-aarch64-static /bin/sh -c "
+            apk update
+            apk add \
+              bash \
+              nodejs \
+              npm \
+              python3 \
+              make \
+              g++ \
+              git \
+              libc6-compat
+
+            npm install -g --omit=dev \
+              homebridge \
+              homebridge-config-ui-x
+
+            npm cache clean --force
+
+            rm -rf \
+              /var/cache/apk/* \
+              /root/.npm \
+              /tmp/*
+          "
+
+          sudo umount rootfs/dev
+          sudo umount rootfs/proc
+          sudo umount rootfs/sys
+
+      - name: Create Homebridge directories
+        run: |
+          mkdir -p rootfs/var/lib/homebridge
+          mkdir -p rootfs/var/log/homebridge
+
+      - name: Create archive
+        run: |
+          tar \
+            --numeric-owner \
+            --xattrs \
+            -czf homebridge.tar.gz \
+            -C rootfs .
+
+      - name: Upload bundle
         uses: actions/upload-artifact@v4
         with:
-          name: homebridge-uxc-container
-          path: homebridge-uxc.tar
+          name: homebridge
+          path: homebridge.tar.gz
+```
