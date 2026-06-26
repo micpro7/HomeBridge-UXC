@@ -1,112 +1,120 @@
 ```yaml
-name: Build Homebridge UXC Bundle
+name: Build Homebridge ARM64 Container
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
+
+permissions:
+  contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install required packages
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            curl \
-            jq \
-            tar \
-            gzip \
-            xz-utils \
-            ca-certificates
+      # Enable ARM64 emulation
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
-      - name: Download Alpine minirootfs
+      # Enable Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Verify Docker
+      - name: Verify Docker
         run: |
+          docker version
+          docker buildx version
+
+      # Build ARM64 container and export rootfs tar
+      - name: Build Homebridge ARM64 RootFS
+        run: |
+          cat > Dockerfile <<'EOF'
+          FROM alpine:3.22
+
+          ENV HOME=/home/homebridge
+          ENV HOMEBRIDGE_CONFIG_UI=1
+
+          RUN apk add --no-cache \
+                bash \
+                curl \
+                tini \
+                libc6-compat \
+                libstdc++ \
+                libgcc \
+                ca-certificates \
+                avahi \
+                avahi-tools \
+                dbus \
+                tzdata \
+                shadow \
+                su-exec
+
+          # Node.js 22
+          RUN apk add --no-cache \
+                nodejs \
+                npm
+
+          RUN addgroup -S homebridge && \
+              adduser -S homebridge -G homebridge -h /home/homebridge
+
+          RUN npm install -g --unsafe-perm \
+                homebridge \
+                homebridge-config-ui-x
+
+          RUN mkdir -p \
+                /home/homebridge/.homebridge \
+                /var/lib/homebridge \
+                /var/run/dbus
+
+          VOLUME ["/home/homebridge/.homebridge"]
+
+          EXPOSE 8581
+          EXPOSE 5353/udp
+
+          USER homebridge
+          WORKDIR /home/homebridge
+
+          ENTRYPOINT ["/sbin/tini","--"]
+
+          CMD ["homebridge"]
+          EOF
+
+          docker buildx build \
+            --platform linux/arm64 \
+            --output type=docker \
+            -t homebridge-arm64 .
+
+          CID=$(docker create homebridge-arm64)
+
           mkdir rootfs
-          cd rootfs
 
-          VERSION=$(curl -fsSL https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/latest-releases.yaml \
-            | awk '/minirootfs/ {print $2; exit}')
+          docker export "$CID" | tar -C rootfs -xf -
 
-          curl -L -o alpine.tar.gz \
-            https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/aarch64/$VERSION
+          docker rm "$CID"
 
-          tar -xzf alpine.tar.gz
-          rm alpine.tar.gz
-
-      - name: Prepare container filesystem
-        run: |
-          sudo mkdir -p rootfs/proc
-          sudo mkdir -p rootfs/sys
-          sudo mkdir -p rootfs/dev
-          sudo mkdir -p rootfs/etc
-          sudo mkdir -p rootfs/root
-
-      - name: Install qemu-user-static
-        run: |
-          sudo apt install -y qemu-user-static
-          sudo cp /usr/bin/qemu-aarch64-static rootfs/usr/bin/
-
-      - name: Configure DNS
-        run: |
-          echo "nameserver 1.1.1.1" | sudo tee rootfs/etc/resolv.conf
-
-      - name: Install Node.js and Homebridge
-        run: |
-          sudo mount --bind /dev rootfs/dev
-          sudo mount --bind /proc rootfs/proc
-          sudo mount --bind /sys rootfs/sys
-
-          sudo chroot rootfs /usr/bin/qemu-aarch64-static /bin/sh -c "
-            apk update
-            apk add \
-              bash \
-              nodejs \
-              npm \
-              python3 \
-              make \
-              g++ \
-              git \
-              libc6-compat
-
-            npm install -g --omit=dev \
-              homebridge \
-              homebridge-config-ui-x
-
-            npm cache clean --force
-
-            rm -rf \
-              /var/cache/apk/* \
-              /root/.npm \
-              /tmp/*
-          "
-
-          sudo umount rootfs/dev
-          sudo umount rootfs/proc
-          sudo umount rootfs/sys
-
-      - name: Create Homebridge directories
-        run: |
-          mkdir -p rootfs/var/lib/homebridge
-          mkdir -p rootfs/var/log/homebridge
-
-      - name: Create archive
-        run: |
           tar \
             --numeric-owner \
             --xattrs \
-            -czf homebridge.tar.gz \
-            -C rootfs .
+            --acls \
+            -C rootfs \
+            -cf homebridge.tar .
 
-      - name: Upload bundle
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: homebridge
-          path: homebridge.tar.gz
+          name: homebridge-arm64
+          path: homebridge.tar
+
+      - name: Publish Release Asset
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: latest
+          files: homebridge.tar
 ```
