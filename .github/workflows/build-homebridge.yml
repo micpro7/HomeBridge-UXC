@@ -1,4 +1,4 @@
-```yaml
+yaml
 name: Build Homebridge ARM64 Container
 
 on:
@@ -117,4 +117,3 @@ jobs:
         with:
           tag_name: latest
           files: homebridge.tar
-```
