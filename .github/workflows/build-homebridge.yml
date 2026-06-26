@@ -1,8 +1,11 @@
-yaml
+```yaml
 name: Build Homebridge ARM64 Container
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -12,65 +15,56 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Enable ARM64 emulation
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
-      # Enable Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Verify Docker
       - name: Verify Docker
         run: |
           docker version
           docker buildx version
 
-      # Build ARM64 container and export rootfs tar
-      - name: Build Homebridge ARM64 RootFS
+      - name: Create Dockerfile
         run: |
           cat > Dockerfile <<'EOF'
           FROM alpine:3.22
 
           ENV HOME=/home/homebridge
-          ENV HOMEBRIDGE_CONFIG_UI=1
 
           RUN apk add --no-cache \
-                bash \
-                curl \
-                tini \
-                libc6-compat \
-                libstdc++ \
-                libgcc \
-                ca-certificates \
-                avahi \
-                avahi-tools \
-                dbus \
-                tzdata \
-                shadow \
-                su-exec
-
-          # Node.js 22
-          RUN apk add --no-cache \
-                nodejs \
-                npm
+              bash \
+              curl \
+              tini \
+              libc6-compat \
+              libstdc++ \
+              libgcc \
+              ca-certificates \
+              avahi \
+              avahi-tools \
+              dbus \
+              tzdata \
+              shadow \
+              su-exec \
+              nodejs \
+              npm
 
           RUN addgroup -S homebridge && \
-              adduser -S homebridge -G homebridge -h /home/homebridge
+              adduser -S -G homebridge -h /home/homebridge homebridge
 
           RUN npm install -g --unsafe-perm \
-                homebridge \
-                homebridge-config-ui-x
+              homebridge \
+              homebridge-config-ui-x
 
           RUN mkdir -p \
-                /home/homebridge/.homebridge \
-                /var/lib/homebridge \
-                /var/run/dbus
+              /home/homebridge/.homebridge \
+              /var/run/dbus
 
           VOLUME ["/home/homebridge/.homebridge"]
 
@@ -81,21 +75,21 @@ jobs:
           WORKDIR /home/homebridge
 
           ENTRYPOINT ["/sbin/tini","--"]
-
           CMD ["homebridge"]
           EOF
 
+      - name: Build ARM64 image
+        run: |
           docker buildx build \
             --platform linux/arm64 \
-            --output type=docker \
+            --load \
             -t homebridge-arm64 .
 
+      - name: Export root filesystem
+        run: |
           CID=$(docker create homebridge-arm64)
-
           mkdir rootfs
-
           docker export "$CID" | tar -C rootfs -xf -
-
           docker rm "$CID"
 
           tar \
@@ -105,15 +99,9 @@ jobs:
             -C rootfs \
             -cf homebridge.tar .
 
-      - name: Upload Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: homebridge-arm64
           path: homebridge.tar
-
-      - name: Publish Release Asset
-        uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main'
-        with:
-          tag_name: latest
-          files: homebridge.tar
+```
