@@ -1,79 +1,67 @@
-name: Build Homebridge UXC (OpenWrt 25.12 Safe)
+name: Build Homebridge UXC (OpenWrt 25.12)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y git build-essential curl rsync tar
+          sudo apt install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+            python3 python3-distutils python3-setuptools rsync unzip wget \
+            file curl
 
-      - name: Prepare workspace
-        run: |
-          mkdir -p openwrt-build
-          cd openwrt-build
-
-      - name: Clone OpenWrt build system (25.12 branch)
+      - name: Clone OpenWrt
         run: |
           git clone https://github.com/openwrt/openwrt.git
           cd openwrt
           git checkout openwrt-25.12
 
-      - name: Add nxhack Node.js feed (CRITICAL FIX)
+      - name: Update feeds
         run: |
           cd openwrt
-          echo "src-git node https://github.com/nxhack/openwrt-node-packages.git;openwrt-25.12" >> feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Enable Node.js in config
+      - name: Add nxhack node feed
+        run: |
+          cd openwrt
+          echo "src-git node https://github.com/nxhack/openwrt-node-packages.git;openwrt-25.12" >> feeds.conf.default
+          ./scripts/feeds update node
+          ./scripts/feeds install -a -p node
+
+      - name: Enable required packages
         run: |
           cd openwrt
           make defconfig
-          echo "CONFIG_PACKAGE_node=y" >> .config
-          echo "CONFIG_PACKAGE_node-npm=y" >> .config
 
-      - name: Compile Node (OpenWrt native build)
+      - name: Build host tools first (CRITICAL FIX)
         run: |
           cd openwrt
-          make package/node/compile -j$(nproc) V=s
+          make tools/compile -j$(nproc)
+          make toolchain/compile -j$(nproc)
+          make package/base-files/compile -j$(nproc)
 
-      - name: Build minimal UXC rootfs structure
+      - name: Build node (correct environment)
         run: |
-          mkdir -p rootfs/usr/local/lib/node_modules
-          mkdir -p rootfs/usr/bin
+          cd openwrt
+          make package/node/compile V=s -j$(nproc)
 
-      - name: Install Homebridge into rootfs (NO NODE INCLUDED)
+      - name: Build Homebridge
         run: |
-          cd rootfs/usr/local/lib/node_modules
-          npm install homebridge homebridge-config-ui-x --omit=dev --production
+          cd openwrt
+          make package/node-homebridge/compile V=s -j$(nproc)
 
-      - name: Create UXC bundle structure
-        run: |
-          mkdir -p bundle
-          rsync -a rootfs/ bundle/
-
-      - name: Remove any accidental bundled Node (safety check)
-        run: |
-          rm -f bundle/usr/bin/node || true
-          rm -f bundle/usr/bin/npm || true
-
-      - name: Create final tarball
-        run: |
-          tar -czf homebridge-uxc-mx5300.tar.gz -C bundle .
-
-      - name: Upload artifact
+      - name: Upload ipk
         uses: actions/upload-artifact@v4
         with:
-          name: homebridge-uxc-mx5300
-          path: homebridge-uxc-mx5300.tar.gz
+          name: homebridge-ipk
+          path: openwrt/bin/packages/**/*.ipk
