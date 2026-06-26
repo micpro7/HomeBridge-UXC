@@ -1,6 +1,5 @@
 FROM alpine:3.20
 
-# install runtime deps
 RUN apk add --no-cache \
     nodejs \
     npm \
@@ -10,13 +9,9 @@ RUN apk add --no-cache \
     g++ \
     git
 
-# install homebridge
 RUN npm install -g --unsafe-perm \
     homebridge \
     homebridge-config-ui-x
-
-# create persistent dirs
-RUN mkdir -p /homebridge
 
 WORKDIR /homebridge
 
