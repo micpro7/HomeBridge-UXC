@@ -69,19 +69,6 @@ Release names follow the format:
 
 Homebridge YYYY-MM-DD
 
-Example:
-
-Homebridge 2026-06-26
-
-Repository Structure
-
-.
-├── Dockerfile
-├── .github/
-│   └── workflows/
-│       └── build-homebridge.yml
-└── README.md
-
 Goals
 
 This project aims to provide the lightest practical Homebridge container for OpenWrt while maintaining compatibility and ease of deployment.
@@ -102,10 +89,3 @@ Future Plans
 	•	Optional Avahi/mDNS integration
 	•	Optional S6 overlay support
 	•	Multi-architecture builds
-
-License
-
-MIT License.
-:::
-
-This README is intentionally concise and project-focused. As the repository matures, you can add sections for installation, UXC deployment commands, troubleshooting, and example configurations.
