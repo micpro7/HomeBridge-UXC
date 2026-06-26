@@ -1,105 +1,73 @@
-name: Build Homebridge ARM64 Container
+name: Build Homebridge UXC
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 permissions:
   contents: write
+
+env:
+  IMAGE_NAME: homebridge-uxc
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
+      - name: Set version
+        run: |
+          echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+          echo "VERSION=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+
+      # -----------------------------
+      # QEMU (only needed if you build ARM64 images)
+      # -----------------------------
+      - name: Set up QEMU (ARM64 support)
         uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Verify Docker
-        run: |
-          docker version
-          docker buildx version
-
-      - name: Create Dockerfile
-        run: |
-          cat > Dockerfile <<'EOF'
-          FROM alpine:3.22
-
-          ENV HOME=/home/homebridge
-
-          RUN apk add --no-cache \
-              bash \
-              curl \
-              tini \
-              libc6-compat \
-              libstdc++ \
-              libgcc \
-              ca-certificates \
-              avahi \
-              avahi-tools \
-              dbus \
-              tzdata \
-              shadow \
-              su-exec \
-              nodejs \
-              npm
-
-          RUN addgroup -S homebridge && \
-              adduser -S -G homebridge -h /home/homebridge homebridge
-
-          RUN npm install -g --unsafe-perm \
-              homebridge \
-              homebridge-config-ui-x
-
-          RUN mkdir -p \
-              /home/homebridge/.homebridge \
-              /var/run/dbus
-
-          VOLUME ["/home/homebridge/.homebridge"]
-
-          EXPOSE 8581
-          EXPOSE 5353/udp
-
-          USER homebridge
-          WORKDIR /home/homebridge
-
-          ENTRYPOINT ["/sbin/tini","--"]
-          CMD ["homebridge"]
-          EOF
-
-      - name: Build ARM64 image
+      # -----------------------------
+      # Build Alpine + Node + Homebridge image
+      # -----------------------------
+      - name: Build container image
         run: |
           docker buildx build \
             --platform linux/arm64 \
+            -t $IMAGE_NAME:$VERSION \
             --load \
-            -t homebridge-arm64 .
+            .
 
-      - name: Export root filesystem
+      # -----------------------------
+      # Export container filesystem (portable bundle)
+      # -----------------------------
+      - name: Export container bundle
         run: |
-          CID=$(docker create homebridge-arm64)
-          mkdir rootfs
-          docker export "$CID" | tar -C rootfs -xf -
-          docker rm "$CID"
+          CONTAINER_ID=$(docker create $IMAGE_NAME:$VERSION)
 
-          tar \
-            --numeric-owner \
-            --xattrs \
-            --acls \
-            -C rootfs \
-            -cf homebridge.tar .
+          docker export $CONTAINER_ID > homebridge-rootfs.tar
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+          gzip -9 homebridge-rootfs.tar
+
+          mv homebridge-rootfs.tar.gz homebridge-uxc-$VERSION.tar.gz
+
+          docker rm $CONTAINER_ID
+
+      # -----------------------------
+      # Create GitHub Release
+      # -----------------------------
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: homebridge-arm64
-          path: homebridge.tar
+          tag_name: homebridge-${{ env.VERSION }}
+          name: Homebridge ${{ env.VERSION }}
+          draft: false
+          prerelease: false
+          files: |
+            homebridge-uxc-${{ env.VERSION }}.tar.gz
