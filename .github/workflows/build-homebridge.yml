@@ -103,4 +103,3 @@ jobs:
         with:
           name: homebridge-arm64
           path: homebridge.tar
-```
