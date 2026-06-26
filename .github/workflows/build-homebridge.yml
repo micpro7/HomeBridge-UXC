@@ -1,163 +1,79 @@
-name: Build Lean Homebridge UXC Bundle
+name: Build Homebridge UXC (OpenWrt 25.12 Safe)
 
-# =========================================================
-# Trigger
-# =========================================================
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+  push:
+    branches: [ main ]
 
-# =========================================================
-# Job
-# =========================================================
 jobs:
   build:
-
-    runs-on: ubuntu-22.04
-
-    permissions:
-      contents: write
-
-    env:
-      QEMU_CPU: cortex-a72
+    runs-on: ubuntu-latest
 
     steps:
-
-      # -----------------------------------------------------
-      # Checkout repo
-      # -----------------------------------------------------
-      - name: Checkout Repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      # -----------------------------------------------------
-      # Set version (THIS FIXES YOUR MISSING VERSION)
-      # -----------------------------------------------------
-      - name: Set Release Version
+      - name: Install build dependencies
         run: |
-          echo "RELEASE_DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+          sudo apt update
+          sudo apt install -y git build-essential curl rsync tar
 
-      # -----------------------------------------------------
-      # Install dependencies
-      # -----------------------------------------------------
-      - name: Install Podman + tools
+      - name: Prepare workspace
         run: |
-          sudo apt-get update
-          sudo apt-get install -y podman qemu-user-static curl jq
+          mkdir -p openwrt-build
+          cd openwrt-build
 
-      # -----------------------------------------------------
-      # Build ARM64 rootfs
-      # -----------------------------------------------------
-      - name: Build Homebridge RootFS
+      - name: Clone OpenWrt build system (25.12 branch)
         run: |
-          set -e
+          git clone https://github.com/openwrt/openwrt.git
+          cd openwrt
+          git checkout openwrt-25.12
 
-          mkdir -p homebridge-bundle/rootfs
-
-          CONTAINER_ID=$(podman run --platform linux/arm64 -d docker.io/alpine:latest sleep infinity)
-
-          podman exec $CONTAINER_ID apk update
-
-          podman exec $CONTAINER_ID apk add --no-cache \
-            nodejs-current \
-            npm \
-            python3 \
-            make \
-            g++ \
-            dbus
-
-          podman exec $CONTAINER_ID npm install -g --unsafe-perm \
-            homebridge \
-            homebridge-config-ui-x
-
-          HB_BIN=$(podman exec $CONTAINER_ID which homebridge)
-          echo "HB_BIN=$HB_BIN" >> $GITHUB_ENV
-
-          # create empty runtime dir only
-          podman exec $CONTAINER_ID mkdir -p /var/lib/homebridge
-
-          # cleanup
-          podman exec $CONTAINER_ID apk del make g++ || true
-          podman exec $CONTAINER_ID rm -rf /root/.npm /var/cache/apk/* /tmp/*
-
-          podman export "$CONTAINER_ID" | tar -C homebridge-bundle/rootfs -xf -
-
-          podman rm -f "$CONTAINER_ID"
-
-      # -----------------------------------------------------
-      # Generate OCI config.json (safe method)
-      # -----------------------------------------------------
-      - name: Generate OCI config.json
+      - name: Add nxhack Node.js feed (CRITICAL FIX)
         run: |
-          mkdir -p homebridge-bundle
+          cd openwrt
+          echo "src-git node https://github.com/nxhack/openwrt-node-packages.git;openwrt-25.12" >> feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
-          CONFIG=homebridge-bundle/config.json
-
-          printf '{\n' > $CONFIG
-          printf '  "ociVersion": "1.0.2",\n' >> $CONFIG
-          printf '  "process": {\n' >> $CONFIG
-          printf '    "terminal": false,\n' >> $CONFIG
-          printf '    "user": { "uid": 0, "gid": 0 },\n' >> $CONFIG
-          printf '    "args": [\n' >> $CONFIG
-          printf '      "%s",\n' "$HB_BIN" >> $CONFIG
-          printf '      "-U",\n' >> $CONFIG
-          printf '      "/var/lib/homebridge"\n' >> $CONFIG
-          printf '    ],\n' >> $CONFIG
-          printf '    "env": [\n' >> $CONFIG
-          printf '      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",\n' >> $CONFIG
-          printf '      "HOME=/root"\n' >> $CONFIG
-          printf '    ],\n' >> $CONFIG
-          printf '    "cwd": "/"\n' >> $CONFIG
-          printf '  },\n' >> $CONFIG
-          printf '  "root": {\n' >> $CONFIG
-          printf '    "path": "rootfs",\n' >> $CONFIG
-          printf '    "readonly": false\n' >> $CONFIG
-          printf '  },\n' >> $CONFIG
-          printf '  "mounts": [\n' >> $CONFIG
-          printf '    {\n' >> $CONFIG
-          printf '      "destination": "/var/lib/homebridge",\n' >> $CONFIG
-          printf '      "type": "bind",\n' >> $CONFIG
-          printf '      "source": "/mnt/SSD/Config/OpenWRT/UXC/HomeBridge",\n' >> $CONFIG
-          printf '      "options": ["rbind", "rw"]\n' >> $CONFIG
-          printf '    },\n' >> $CONFIG
-          printf '    { "destination": "/proc", "type": "proc", "source": "proc" },\n' >> $CONFIG
-          printf '    { "destination": "/dev", "type": "tmpfs", "source": "tmpfs" },\n' >> $CONFIG
-          printf '    { "destination": "/sys", "type": "sysfs", "source": "sysfs" }\n' >> $CONFIG
-          printf '  ],\n' >> $CONFIG
-          printf '  "linux": {\n' >> $CONFIG
-          printf '    "namespaces": [\n' >> $CONFIG
-          printf '      { "type": "pid" },\n' >> $CONFIG
-          printf '      { "type": "ipc" },\n' >> $CONFIG
-          printf '      { "type": "uts" },\n' >> $CONFIG
-          printf '      { "type": "mount" }\n' >> $CONFIG
-          printf '    ]\n' >> $CONFIG
-          printf '  }\n' >> $CONFIG
-          printf '}\n' >> $CONFIG
-
-      # -----------------------------------------------------
-      # Package bundle
-      # -----------------------------------------------------
-      - name: Package OCI bundle
+      - name: Enable Node.js in config
         run: |
-          tar -cf homebridge-arm64.tar -C homebridge-bundle .
+          cd openwrt
+          make defconfig
+          echo "CONFIG_PACKAGE_node=y" >> .config
+          echo "CONFIG_PACKAGE_node-npm=y" >> .config
 
-      # -----------------------------------------------------
-      # Publish release (WITH VERSION FIX)
-      # -----------------------------------------------------
-      - name: Publish Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compile Node (OpenWrt native build)
         run: |
-          TAG="Homebridge-${{ env.RELEASE_DATE }}"
+          cd openwrt
+          make package/node/compile -j$(nproc) V=s
 
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" \
-              --title "Homebridge ${{ env.RELEASE_DATE }}" \
-              --notes "Lean UXC Homebridge runtime bundle"
-          else
-            gh release edit "$TAG" \
-              --title "Homebridge ${{ env.RELEASE_DATE }}"
-          fi
+      - name: Build minimal UXC rootfs structure
+        run: |
+          mkdir -p rootfs/usr/local/lib/node_modules
+          mkdir -p rootfs/usr/bin
 
-          gh release upload "$TAG" homebridge-arm64.tar --clobber
+      - name: Install Homebridge into rootfs (NO NODE INCLUDED)
+        run: |
+          cd rootfs/usr/local/lib/node_modules
+          npm install homebridge homebridge-config-ui-x --omit=dev --production
+
+      - name: Create UXC bundle structure
+        run: |
+          mkdir -p bundle
+          rsync -a rootfs/ bundle/
+
+      - name: Remove any accidental bundled Node (safety check)
+        run: |
+          rm -f bundle/usr/bin/node || true
+          rm -f bundle/usr/bin/npm || true
+
+      - name: Create final tarball
+        run: |
+          tar -czf homebridge-uxc-mx5300.tar.gz -C bundle .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: homebridge-uxc-mx5300
+          path: homebridge-uxc-mx5300.tar.gz
