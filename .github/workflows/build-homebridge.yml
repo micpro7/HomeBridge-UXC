@@ -25,7 +25,7 @@ jobs:
           echo "VERSION=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
 
       # -----------------------------
-      # QEMU (only needed if you build ARM64 images)
+      # QEMU (ARM64 support)
       # -----------------------------
       - name: Set up QEMU (ARM64 support)
         uses: docker/setup-qemu-action@v3
@@ -45,7 +45,7 @@ jobs:
             .
 
       # -----------------------------
-      # Export container filesystem (portable bundle)
+      # Export container filesystem
       # -----------------------------
       - name: Export container bundle
         run: |
@@ -55,7 +55,7 @@ jobs:
 
           gzip -9 homebridge-rootfs.tar
 
-          mv homebridge-rootfs.tar.gz homebridge-uxc-$VERSION.tar.gz
+          mv homebridge-rootfs.tar.gz homebridge-arm64.tar.gz
 
           docker rm $CONTAINER_ID
 
@@ -70,4 +70,4 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            homebridge-uxc-${{ env.VERSION }}.tar.gz
+            homebridge-arm64.tar.gz
