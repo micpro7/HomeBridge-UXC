@@ -16,58 +16,128 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set version
+      - name: Version
         run: |
-          echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
           echo "VERSION=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
 
-      # -----------------------------
-      # QEMU (ARM64 support)
-      # -----------------------------
-      - name: Set up QEMU (ARM64 support)
-        uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v3
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
-      # -----------------------------
-      # Build Alpine + Node + Homebridge image
-      # -----------------------------
-      - name: Build container image
+      - name: Build ARM64 image
         run: |
           docker buildx build \
             --platform linux/arm64 \
-            -t $IMAGE_NAME:$VERSION \
+            -t ${IMAGE_NAME}:${VERSION} \
             --load \
             .
 
-      # -----------------------------
-      # Export container filesystem
-      # -----------------------------
-      - name: Export container bundle
+      - name: Export root filesystem
         run: |
-          CONTAINER_ID=$(docker create $IMAGE_NAME:$VERSION)
+          mkdir bundle
+          mkdir bundle/rootfs
 
-          docker export $CONTAINER_ID > homebridge-rootfs.tar
+          CID=$(docker create ${IMAGE_NAME}:${VERSION})
 
-          gzip -9 homebridge-rootfs.tar
+          docker export "$CID" | tar -C bundle/rootfs -xf -
 
-          mv homebridge-rootfs.tar.gz homebridge-arm64.tar.gz
+          docker rm "$CID"
 
-          docker rm $CONTAINER_ID
+      - name: Generate OCI config
+        run: |
+          cat > bundle/config.json <<'EOF'
+{
+  "ociVersion": "1.0.2",
+  "process": {
+    "terminal": false,
+    "user": {
+      "uid": 0,
+      "gid": 0
+    },
+    "args": [
+      "/usr/bin/node",
+      "/usr/local/lib/node_modules/homebridge/bin/homebridge",
+      "-U",
+      "/var/lib/homebridge"
+    ],
+    "env": [
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "HOME=/root"
+    ],
+    "cwd": "/"
+  },
+  "root": {
+    "path": "rootfs",
+    "readonly": false
+  },
+  "mounts": [
+    {
+      "destination": "/var/lib/homebridge",
+      "type": "bind",
+      "source": "/var/lib/homebridge",
+      "options": [
+        "rbind",
+        "rw"
+      ]
+    },
+    {
+      "destination": "/proc",
+      "type": "proc",
+      "source": "proc"
+    },
+    {
+      "destination": "/dev",
+      "type": "tmpfs",
+      "source": "tmpfs"
+    },
+    {
+      "destination": "/dev/pts",
+      "type": "devpts",
+      "source": "devpts"
+    },
+    {
+      "destination": "/dev/shm",
+      "type": "tmpfs",
+      "source": "shm"
+    },
+    {
+      "destination": "/tmp",
+      "type": "tmpfs",
+      "source": "tmpfs"
+    },
+    {
+      "destination": "/sys",
+      "type": "sysfs",
+      "source": "sysfs"
+    }
+  ],
+  "linux": {
+    "namespaces": [
+      { "type": "pid" },
+      { "type": "ipc" },
+      { "type": "uts" },
+      { "type": "mount" },
+      { "type": "network" }
+    ],
+    "resources": {
+      "memory": {
+        "limit": 268435456,
+        "swap": 268435456
+      }
+    }
+  }
+}
+EOF
 
-      # -----------------------------
-      # Create GitHub Release
-      # -----------------------------
-      - name: Create Release
+      - name: Create bundle
+        run: |
+          tar -C bundle -czf homebridge-arm64.tar.gz .
+
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: homebridge-${{ env.VERSION }}
           name: Homebridge ${{ env.VERSION }}
-          draft: false
-          prerelease: false
-          files: |
-            homebridge-arm64.tar.gz
+          files: homebridge-arm64.tar.gz
